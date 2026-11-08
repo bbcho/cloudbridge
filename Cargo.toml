@@ -172,6 +172,12 @@ sys-locale = { version = "0.3", features = ["js"] }
 # Already in the tree through `zip`.
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 flate2 = "1"
+# Enable engine tests without resolving the facade's optional GPUI Fast dependencies.
+gpui-pre = { version = "=0.3.10", features = ["test-support"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# Test builds use the runtime shader path so Command Line Tools suffice.
+gpui-pre-apple = { version = "=0.3.10", features = ["runtime_shaders"] }
 
 # `build.rs` embeds the Windows executable's icon. Already in the tree
 # through a dependency's own build script.
