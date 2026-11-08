@@ -382,9 +382,7 @@ impl AccountsView {
 
     fn show_add_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_add_dialog = true;
-        self.selected_source = registry::default_source();
-        self.fill_status = None;
-        self.use_system_credentials = has_system_credentials(self.selected_source);
+        self.set_source(registry::default_source(), window, cx);
         self.dialog_error = None;
         self.error = None;
         self.success = None;
@@ -401,9 +399,8 @@ impl AccountsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.clear_credentials(window, cx);
         self.selected_source = source;
-        // Whatever the last fill found was about the source being left.
-        self.fill_status = None;
         self.use_system_credentials = has_system_credentials(source);
 
         // Every label comes from the descriptor, so a new source needs no
@@ -420,6 +417,16 @@ impl AccountsView {
         });
 
         cx.notify();
+    }
+
+    fn clear_credentials(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ak_input.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
+        self.sk_input.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
+        self.fill_status = None;
     }
 
     /// Copy what this machine already has into the form.
@@ -505,7 +512,8 @@ impl AccountsView {
 
     /// The add dialog was dismissed (Escape, Cancel, the close button or the
     /// backdrop), or the page closed it after a save.
-    fn add_dialog_closed(&mut self, cx: &mut Context<Self>) {
+    fn add_dialog_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_credentials(window, cx);
         self.show_add_dialog = false;
         self.dialog_error = None;
         cx.notify();
@@ -685,7 +693,7 @@ impl AccountsView {
                         if this.show_add_dialog {
                             window.close_dialog(cx);
                         }
-                        this.add_dialog_closed(cx);
+                        this.add_dialog_closed(window, cx);
                         if fetch_after_save {
                             this.fetch_first_bill(saved, cx);
                         } else {
@@ -1728,7 +1736,7 @@ impl AccountsView {
             .title(tr!("accounts.add_title"))
             .w(rems(32.).to_pixels(window.rem_size()))
             .max_h(rems(37.5))
-            .on_close(cx.listener(|this, _, _, cx| this.add_dialog_closed(cx)))
+            .on_close(cx.listener(|this, _, window, cx| this.add_dialog_closed(window, cx)))
             .on_ok(move |_, window, cx| {
                 view.update(cx, |this, cx| this.save_account(window, cx))
                     .ok();
@@ -2398,5 +2406,123 @@ impl Finding<'_> {
             Finding::Issue(issue) => issue.severity,
             Finding::Untagged(untagged) => untagged.severity,
         }
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod credential_tests {
+    use super::AccountsView;
+    use crate::cloud::registry;
+    use gpui_kit::{AppContext, TestAppContext, WindowOptions};
+
+    #[gpui_kit::test]
+    fn escape_discards_credentials_from_the_rendered_dialog(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        let (window, view) = cx.update(|cx| {
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| AccountsView::new(window, cx))
+            })
+            .unwrap()
+        });
+        cx.update_window(window, |_, window, cx| {
+            view.update(cx, |view, cx| {
+                view.show_add_dialog(window, cx);
+                view.ak_input.update(cx, |input, cx| {
+                    input.set_value("SYNTHETIC_ACCESS_KEY", window, cx);
+                });
+                view.sk_input.update(cx, |input, cx| {
+                    input.set_value("SYNTHETIC_SECRET", window, cx);
+                });
+            });
+            window.draw(cx).clear(cx);
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+        cx.simulate_keystrokes(window, "escape");
+        cx.update(|cx| {
+            let view = view.read(cx);
+            assert!(!view.show_add_dialog);
+            assert_eq!(view.ak_input.read(cx).value().as_ref(), "");
+            assert_eq!(view.sk_input.read(cx).value().as_ref(), "");
+        });
+    }
+
+    #[gpui_kit::test]
+    fn changing_provider_discards_the_previous_credentials(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (window, view) = cx.update(|cx| {
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| AccountsView::new(window, cx))
+            })
+            .unwrap()
+        });
+        cx.update_window(window, |_, window, cx| {
+            view.update(cx, |view, cx| {
+                view.ak_input.update(cx, |input, cx| {
+                    input.set_value("SYNTHETIC_ACCESS_KEY", window, cx);
+                });
+                view.sk_input.update(cx, |input, cx| {
+                    input.set_value("SYNTHETIC_SECRET", window, cx);
+                });
+                let source = registry::all().iter().find(|s| s.id == "OpenAI").unwrap();
+                view.set_source(source, window, cx);
+                assert_eq!(view.ak_input.read(cx).value().as_ref(), "");
+                assert_eq!(view.sk_input.read(cx).value().as_ref(), "");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn dismissing_the_account_form_discards_credentials(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (window, view) = cx.update(|cx| {
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| AccountsView::new(window, cx))
+            })
+            .unwrap()
+        });
+        cx.update_window(window, |_, window, cx| {
+            view.update(cx, |view, cx| {
+                view.ak_input.update(cx, |input, cx| {
+                    input.set_value("SYNTHETIC_ACCESS_KEY", window, cx);
+                });
+                view.sk_input.update(cx, |input, cx| {
+                    input.set_value("SYNTHETIC_SECRET", window, cx);
+                });
+                view.add_dialog_closed(window, cx);
+                assert_eq!(view.ak_input.read(cx).value().as_ref(), "");
+                assert_eq!(view.sk_input.read(cx).value().as_ref(), "");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn opening_an_account_form_starts_with_empty_credentials(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (window, view) = cx.update(|cx| {
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| AccountsView::new(window, cx))
+            })
+            .unwrap()
+        });
+        cx.update_window(window, |_, window, cx| {
+            view.update(cx, |view, cx| {
+                view.ak_input.update(cx, |input, cx| {
+                    input.set_value("SYNTHETIC_ACCESS_KEY", window, cx);
+                });
+                view.sk_input.update(cx, |input, cx| {
+                    input.set_value("SYNTHETIC_SECRET", window, cx);
+                });
+                view.show_add_dialog(window, cx);
+                assert_eq!(view.ak_input.read(cx).value().as_ref(), "");
+                assert_eq!(view.sk_input.read(cx).value().as_ref(), "");
+            });
+        })
+        .unwrap();
     }
 }
